@@ -25,6 +25,12 @@
             <version>${aws.sdk.version}</version>
         </dependency>
 
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>ses</artifactId>
+            <version>${aws.sdk.version}</version>
+        </dependency>
+
         <!-- Fargate上でIAM Role経由で認証するため -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>

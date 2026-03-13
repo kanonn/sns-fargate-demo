@@ -4,113 +4,71 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.sns.SnsClient;
 import software.amazon.awssdk.services.sns.model.PublishRequest;
 import software.amazon.awssdk.services.sns.model.PublishResponse;
-import software.amazon.awssdk.services.sns.model.SubscribeRequest;
-import software.amazon.awssdk.services.sns.model.SubscribeResponse;
-import software.amazon.awssdk.services.sns.model.ListSubscriptionsByTopicRequest;
-import software.amazon.awssdk.services.sns.model.Subscription;
+import software.amazon.awssdk.services.sns.model.SnsException;
 
-import java.util.List;
+import java.time.LocalDateTime;
 
 /**
- * SNS経由でメール送信テスト
+ * Email sending test via AWS SNS (Publish Only)
  *
- * 使い方:
- *   環境変数を設定して実行
- *     SNS_TOPIC_ARN  : SNSトピックのARN (必須)
- *     SNS_EMAIL      : サブスクリプション登録するメールアドレス (初回のみ必要)
- *     AWS_REGION     : AWSリージョン (デフォルト: ap-northeast-1)
+ * Usage:
+ * Set the following environment variables before executing:
+ * SNS_TOPIC_ARN : The ARN of the SNS topic (Required)
+ * AWS_REGION    : AWS Region (Default: ap-northeast-1)
  */
 public class SnsMailTest {
 
     public static void main(String[] args) {
-        // ── 環境変数から設定を読み込む ──────────────────────────────
+        // ── 1. Load configurations from environment variables ─────────────
         String topicArn = System.getenv("SNS_TOPIC_ARN");
-        String email    = System.getenv("SNS_EMAIL");
-        String region   = System.getenv().getOrDefault("AWS_REGION", "ap-northeast-1");
+        String regionStr = System.getenv().getOrDefault("AWS_REGION", "ap-northeast-1");
 
         if (topicArn == null || topicArn.isBlank()) {
-            System.err.println("[ERROR] 環境変数 SNS_TOPIC_ARN が設定されていません。");
+            System.err.println("[ERROR] Environment variable SNS_TOPIC_ARN is not set.");
             System.exit(1);
         }
 
-        System.out.println("=== SNS Mail Test ===");
-        System.out.println("Region   : " + region);
-        System.out.println("TopicARN : " + topicArn);
+        System.out.println("=== SNS Publish Test ===");
+        System.out.println("Region    : " + regionStr);
+        System.out.println("Topic ARN : " + topicArn);
 
-        // ── SNSクライアント生成 (Fargate上ではタスクロールで自動認証) ──
+        // ── 2. Create SNS Client ──────────────────────────────────────────
         SnsClient snsClient = SnsClient.builder()
-                .region(Region.of(region))
+                .region(Region.of(regionStr))
                 .build();
 
-        // ── メールサブスクリプションが未登録なら登録する ────────────
-        if (email != null && !email.isBlank()) {
-            boolean alreadySubscribed = isAlreadySubscribed(snsClient, topicArn, email);
+        // ── 3. Publish message to the Topic ───────────────────────────────
+        System.out.println("\nPublishing message to SNS Topic...");
 
-            if (!alreadySubscribed) {
-                System.out.println("メールアドレスを登録中: " + email);
-                SubscribeResponse subscribeResponse = snsClient.subscribe(
-                        SubscribeRequest.builder()
-                                .topicArn(topicArn)
-                                .protocol("email")
-                                .endpoint(email)
-                                .build()
-                );
-                System.out.println("[INFO] サブスクリプション登録完了。確認メールを承認してください。");
-                System.out.println("       SubscriptionArn: " + subscribeResponse.subscriptionArn());
-                System.out.println("       ※ メールを確認して「Confirm subscription」をクリックしてください。");
-            } else {
-                System.out.println("[INFO] " + email + " はすでにサブスクリプション登録済みです。");
-            }
-        }
-
-        // ── SNSにメッセージをパブリッシュ ────────────────────────────
-        System.out.println("\nSNSにメッセージを送信中...");
-
-        String message = String.format(
-                "【SNSテスト】Fargateからのメール送信テスト\n\n" +
-                "このメッセージはAWS Fargate上のJavaアプリから送信されました。\n\n" +
-                "送信時刻: %s\n" +
-                "リージョン: %s\n" +
-                "トピックARN: %s",
-                java.time.LocalDateTime.now(),
-                region,
+        String messageBody = String.format(
+                "[SNS Test] Email sent from AWS Fargate\n\n" +
+                "This is a test message published to the SNS Topic from a Java application.\n\n" +
+                "Timestamp : %s\n" +
+                "Region    : %s\n" +
+                "Topic ARN : %s",
+                LocalDateTime.now(),
+                regionStr,
                 topicArn
         );
 
-        PublishResponse publishResponse = snsClient.publish(
-                PublishRequest.builder()
-                        .topicArn(topicArn)
-                        .subject("【テスト】FargateからのSNSメール")
-                        .message(message)
-                        .build()
-        );
-
-        System.out.println("[SUCCESS] メッセージ送信完了！");
-        System.out.println("          MessageId: " + publishResponse.messageId());
-        System.out.println("          メールが届いているか確認してください。");
-
-        snsClient.close();
-    }
-
-    /**
-     * 指定メールアドレスがすでにサブスクリプション登録されているか確認
-     */
-    private static boolean isAlreadySubscribed(SnsClient snsClient, String topicArn, String email) {
         try {
-            List<Subscription> subscriptions = snsClient.listSubscriptionsByTopic(
-                    ListSubscriptionsByTopicRequest.builder()
-                            .topicArn(topicArn)
-                            .build()
-            ).subscriptions();
+            PublishRequest request = PublishRequest.builder()
+                    .topicArn(topicArn)
+                    .subject("[Test] Fargate SNS Notification")
+                    .message(messageBody)
+                    .build();
 
-            return subscriptions.stream()
-                    .anyMatch(sub ->
-                            "email".equals(sub.protocol()) &&
-                            email.equalsIgnoreCase(sub.endpoint())
-                    );
-        } catch (Exception e) {
-            System.out.println("[WARN] サブスクリプション確認中にエラー: " + e.getMessage());
-            return false;
+            PublishResponse result = snsClient.publish(request);
+
+            System.out.println("[SUCCESS] Message published successfully!");
+            System.out.println("          MessageId: " + result.messageId());
+            System.out.println("          Please check the subscribed email inboxes.");
+
+        } catch (SnsException e) {
+            System.err.println("[ERROR] Failed to publish message.");
+            System.err.println("        Error Details: " + e.awsErrorDetails().errorMessage());
+        } finally {
+            snsClient.close();
         }
     }
 }
