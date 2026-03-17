@@ -1,111 +1,108 @@
-package com.example.ses;
+package com.example.sns;
 
 import software.amazon.awssdk.regions.Region;
-import software.amazon.awssdk.services.ses.SesClient;
-import software.amazon.awssdk.services.ses.model.Body;
-import software.amazon.awssdk.services.ses.model.Content;
-import software.amazon.awssdk.services.ses.model.Destination;
-import software.amazon.awssdk.services.ses.model.Message;
-import software.amazon.awssdk.services.ses.model.SendEmailRequest;
-import software.amazon.awssdk.services.ses.model.SendEmailResponse;
-import software.amazon.awssdk.services.ses.model.SesException;
+import software.amazon.awssdk.services.sesv2.SesV2Client;
+import software.amazon.awssdk.services.sesv2.model.Body;
+import software.amazon.awssdk.services.sesv2.model.Content;
+import software.amazon.awssdk.services.sesv2.model.Destination;
+import software.amazon.awssdk.services.sesv2.model.EmailContent;
+import software.amazon.awssdk.services.sesv2.model.Message;
+import software.amazon.awssdk.services.sesv2.model.SendEmailRequest;
+import software.amazon.awssdk.services.sesv2.model.SendEmailResponse;
+
+import java.time.LocalDateTime;
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
 
 /**
- * Email sending test via AWS SES
+ * Send emails via AWS SES v2 (multiple recipients supported).
  *
- * Usage:
- * Set the following environment variables before executing:
- * SES_SENDER_EMAIL    : The verified sender email address in AWS SES (Required)
- * SES_RECIPIENT_EMAIL : The recipient email address (Required)
- * AWS_REGION          : AWS Region (Default: ap-northeast-1)
+ * Required environment variables:
+ *   SES_FROM     : Verified sender email address (must be verified in SES)
+ *   SES_TO       : Comma-separated recipient email addresses (e.g. a@x.com,b@x.com)
+ *   AWS_REGION   : AWS region (default: ap-northeast-1)
+ *
+ * On Fargate, authentication is handled automatically via the IAM task role.
+ * No AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY needed.
  */
 public class SesMailTest {
 
     public static void main(String[] args) {
-        // ── Load configurations from environment variables ─────────────
-        String senderEmail = System.getenv("SES_SENDER_EMAIL");
-        String recipientEmail = System.getenv("SES_RECIPIENT_EMAIL");
-        String regionStr = System.getenv().getOrDefault("AWS_REGION", "ap-northeast-1");
+        // -- Load configuration from environment variables --
+        String from      = System.getenv("SES_FROM");
+        String toEnv     = System.getenv("SES_TO");
+        String region    = System.getenv().getOrDefault("AWS_REGION", "ap-northeast-1");
 
-        if (senderEmail == null || senderEmail.isBlank()) {
-            System.err.println("[ERROR] Environment variable SES_SENDER_EMAIL is not set.");
+        // -- Validate required variables --
+        if (from == null || from.isBlank()) {
+            System.err.println("[ERROR] Environment variable SES_FROM is not set.");
+            System.exit(1);
+        }
+        if (toEnv == null || toEnv.isBlank()) {
+            System.err.println("[ERROR] Environment variable SES_TO is not set.");
             System.exit(1);
         }
 
-        if (recipientEmail == null || recipientEmail.isBlank()) {
-            System.err.println("[ERROR] Environment variable SES_RECIPIENT_EMAIL is not set.");
-            System.exit(1);
-        }
+        // -- Parse comma-separated recipient list --
+        List<String> toAddresses = Arrays.stream(toEnv.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toList());
 
-        System.out.println("=== SES Mail Test ===");
-        System.out.println("Region          : " + regionStr);
-        System.out.println("Sender Email    : " + senderEmail);
-        System.out.println("Recipient Email : " + recipientEmail);
+        System.out.println("=== SES Mail Test (Multiple Recipients) ===");
+        System.out.println("Region     : " + region);
+        System.out.println("From       : " + from);
+        System.out.println("To (" + toAddresses.size() + ")  : " + toAddresses);
 
-        // ── Create SES Client ──────────────────────────────────────────
-        Region region = Region.of(regionStr);
-        SesClient sesClient = SesClient.builder()
-                .region(region)
+        // -- Build SES v2 client (uses IAM task role on Fargate automatically) --
+        SesV2Client sesClient = SesV2Client.builder()
+                .region(Region.of(region))
                 .build();
 
-        // ── Publish message via SES ────────────────────────────────────
-        System.out.println("\nSending email via AWS SES...");
-
-        try {
-            sendEmail(sesClient, senderEmail, recipientEmail);
-            System.out.println("[SUCCESS] Email sent successfully!");
-            System.out.println("          Please check the recipient's inbox.");
-        } catch (SesException e) {
-            System.err.println("[ERROR] Failed to send email via SES.");
-            System.err.println("        Error Message: " + e.awsErrorDetails().errorMessage());
-        } finally {
-            sesClient.close();
-        }
-    }
-
-    /**
-     * Helper method to construct and send the email
-     */
-    private static void sendEmail(SesClient client, String sender, String recipient) throws SesException {
-        Destination destination = Destination.builder()
-                .toAddresses(recipient)
-                .build();
-
-        Content subject = Content.builder()
-                .data("[Test] Email from AWS Fargate via SES")
-                .build();
-
-        String bodyText = String.format(
-                "【SES Test】Fargate Email Sending Test\n\n" +
-                "This message was sent from a Java application running on AWS Fargate.\n\n" +
+        // -- Compose email content --
+        String subject = "[TEST] SES Email from Fargate";
+        String body = String.format(
+                "This email was sent from a Java application running on AWS Fargate via SES.\n\n" +
                 "Timestamp : %s\n" +
-                "Sender    : %s\n" +
-                "Recipient : %s",
-                java.time.LocalDateTime.now(),
-                sender,
-                recipient
+                "Region    : %s\n" +
+                "From      : %s\n" +
+                "To        : %s",
+                LocalDateTime.now(),
+                region,
+                from,
+                String.join(", ", toAddresses)
         );
 
-        Content content = Content.builder()
-                .data(bodyText)
-                .build();
+        // -- Send email --
+        System.out.println("\nSending email...");
 
-        Body body = Body.builder()
-                .text(content)
-                .build();
+        SendEmailResponse response = sesClient.sendEmail(
+                SendEmailRequest.builder()
+                        .fromEmailAddress(from)
+                        .destination(
+                                Destination.builder()
+                                        .toAddresses(toAddresses)
+                                        .build()
+                        )
+                        .content(
+                                EmailContent.builder()
+                                        .simple(
+                                                Message.builder()
+                                                        .subject(Content.builder().data(subject).charset("UTF-8").build())
+                                                        .body(Body.builder()
+                                                                .text(Content.builder().data(body).charset("UTF-8").build())
+                                                                .build())
+                                                        .build()
+                                        )
+                                        .build()
+                        )
+                        .build()
+        );
 
-        Message message = Message.builder()
-                .subject(subject)
-                .body(body)
-                .build();
+        System.out.println("[SUCCESS] Email sent!");
+        System.out.println("          MessageId : " + response.messageId());
 
-        SendEmailRequest request = SendEmailRequest.builder()
-                .source(sender)
-                .destination(destination)
-                .message(message)
-                .build();
-
-        SendEmailResponse response = client.sendEmail(request);
-        System.out.println("          MessageId: " + response.messageId());
+        sesClient.close();
     }
 }
